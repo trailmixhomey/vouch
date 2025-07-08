@@ -13,6 +13,8 @@ struct CreateReviewView: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showingImagePicker = false
     @State private var showingCameraActionSheet = false
+    @State private var showingCamera = false
+    @State private var capturedImage: UIImage?
     @State private var isPosting = false
     @State private var showingSuccessAlert = false
     @State private var showingErrorAlert = false
@@ -200,15 +202,24 @@ struct CreateReviewView: View {
         .navigationTitle("Write Review")
         .navigationBarTitleDisplayMode(.inline)
         .photosPicker(isPresented: $showingImagePicker, selection: $selectedPhotos, maxSelectionCount: 5, matching: .images)
+        .sheet(isPresented: $showingCamera) {
+            CameraView(isPresented: $showingCamera, capturedImage: $capturedImage)
+        }
         .onChange(of: selectedPhotos) { newPhotos in
             Task {
                 await loadSelectedPhotos(newPhotos)
             }
         }
+        .onChange(of: capturedImage) { newImage in
+            if let image = newImage {
+                addCapturedImage(image)
+            }
+        }
         .confirmationDialog("Add Photos", isPresented: $showingCameraActionSheet) {
-            Button("Camera") {
-                // For now, we'll use PhotosPicker. Camera integration would require additional setup
-                showingImagePicker = true
+            if CameraView.isCameraAvailable {
+                Button("Camera") {
+                    showingCamera = true
+                }
             }
             Button("Photo Library") {
                 showingImagePicker = true
@@ -254,6 +265,27 @@ struct CreateReviewView: View {
             selectedImages = newImageURLs
             print("📸 CreateReviewView: Updated selectedImages with \(newImageURLs.count) photos")
         }
+    }
+    
+    private func addCapturedImage(_ image: UIImage) {
+        print("📸 CreateReviewView: Adding captured image...")
+        
+        // Convert UIImage to JPEG data
+        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            print("❌ CreateReviewView: Failed to convert image to JPEG data")
+            return
+        }
+        
+        // Create base64 data URL
+        let base64String = imageData.base64EncodedString()
+        let dataURL = "data:image/jpeg;base64,\(base64String)"
+        
+        // Add to selected images
+        selectedImages.append(dataURL)
+        print("📸 CreateReviewView: Added captured image (\(imageData.count) bytes)")
+        
+        // Clear the captured image
+        capturedImage = nil
     }
     
     private func postReview() {
@@ -304,6 +336,7 @@ struct CreateReviewView: View {
                     selectedCategory = nil
                     selectedImages = []
                     selectedPhotos = []
+                    capturedImage = nil
                     isPosting = false
                     
                     // Navigate to home tab
