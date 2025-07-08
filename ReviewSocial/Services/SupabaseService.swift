@@ -329,8 +329,8 @@ class SupabaseService: ObservableObject {
         
         do {
             let response: [[String: AnyJSON]] = try await client
-                .from("reviews")
-                .select("*, users(username, display_name, avatar_url)")
+                .from("reviews_with_details")
+                .select("*")
                 .order("created_at", ascending: false)
                 .execute()
                 .value
@@ -403,6 +403,10 @@ class SupabaseService: ObservableObject {
             
             let imageURLs = reviewData["image_urls"]?.arrayValue?.compactMap { $0.stringValue } ?? []
             
+            // Parse aggregated counts from the view
+            let likesCount = reviewData["likes_count"]?.intValue ?? 0
+            let commentsCount = reviewData["comments_count"]?.intValue ?? 0
+            
             var review = Review(
                 userId: userId,
                 title: title,
@@ -415,6 +419,13 @@ class SupabaseService: ObservableObject {
             // Set the actual ID and date from database
             review.id = id
             review.dateCreated = createdAt
+            
+            // Set the aggregated counts
+            review.likesCount = likesCount
+            review.commentsCount = commentsCount
+            // Note: sharesCount is not tracked in the database yet, keeping default 0
+            
+            print("🔍 SupabaseService: Review '\(title)' has \(commentsCount) comments, \(likesCount) likes")
             
             return review
         }
@@ -503,6 +514,55 @@ class SupabaseService: ObservableObject {
             .from("comments")
             .insert(commentData)
             .execute()
+    }
+    
+    func fetchComments(for reviewId: UUID) async throws -> [Comment] {
+        print("🔍 SupabaseService: Fetching comments for review: \(reviewId)")
+        
+        let response: [[String: AnyJSON]] = try await client
+            .from("comments_with_users")
+            .select("*")
+            .eq("review_id", value: reviewId.uuidString)
+            .order("created_at", ascending: true)
+            .execute()
+            .value
+        
+        print("🔍 SupabaseService: Fetched \(response.count) comments")
+        
+        let comments = response.compactMap { commentData -> Comment? in
+            guard let idString = commentData["id"]?.stringValue,
+                  let id = UUID(uuidString: idString),
+                  let reviewIdString = commentData["review_id"]?.stringValue,
+                  let reviewId = UUID(uuidString: reviewIdString),
+                  let userIdString = commentData["user_id"]?.stringValue,
+                  let userId = UUID(uuidString: userIdString),
+                  let content = commentData["content"]?.stringValue,
+                  let createdAtString = commentData["created_at"]?.stringValue else {
+                print("❌ SupabaseService: Failed to parse comment data: \(commentData)")
+                return nil
+            }
+            
+            let dateFormatter = ISO8601DateFormatter()
+            let createdAt = dateFormatter.date(from: createdAtString) ?? Date()
+            
+            // Parse user data directly from the view
+            let username = commentData["username"]?.stringValue ?? "Unknown"
+            let displayName = commentData["display_name"]?.stringValue
+            let avatarURL = commentData["avatar_url"]?.stringValue
+            
+            return Comment(
+                id: id,
+                reviewId: reviewId,
+                userId: userId,
+                content: content,
+                dateCreated: createdAt,
+                username: username,
+                displayName: displayName,
+                avatarURL: avatarURL
+            )
+        }
+        
+        return comments
     }
     
     // MARK: - User Profile

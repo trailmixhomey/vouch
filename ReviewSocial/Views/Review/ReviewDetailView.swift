@@ -3,6 +3,7 @@ import SwiftUI
 struct ReviewDetailView: View {
     let review: Review
     @StateObject private var supabaseService = SupabaseService.shared
+    @StateObject private var reviewStore = ReviewStore.shared
     @State private var comments: [Comment] = []
     @State private var newCommentText = ""
     @State private var isLiked = false
@@ -268,22 +269,60 @@ struct ReviewDetailView: View {
     }
     
     private func loadComments() {
-        // Start with empty comments - would load from database in real app
-        comments = []
+        print("📝 ReviewDetailView: Loading comments for review: \(review.id)")
+        Task {
+            do {
+                let fetchedComments = try await supabaseService.fetchComments(for: review.id)
+                await MainActor.run {
+                    self.comments = fetchedComments
+                    print("📝 ReviewDetailView: Loaded \(fetchedComments.count) comments")
+                }
+            } catch {
+                print("❌ ReviewDetailView: Failed to load comments: \(error)")
+                await MainActor.run {
+                    self.comments = []
+                }
+            }
+        }
     }
     
     private func postComment() {
         let trimmedComment = newCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedComment.isEmpty else { return }
         
-        let newComment = Comment(
-            reviewId: review.id,
-            userId: supabaseService.currentUser?.id ?? UUID(),
-            content: trimmedComment
-        )
+        print("📝 ReviewDetailView: Posting comment: \(trimmedComment)")
         
-        comments.append(newComment)
-        newCommentText = ""
+        Task {
+            do {
+                // Post comment to database
+                try await supabaseService.addComment(reviewId: review.id, content: trimmedComment)
+                
+                await MainActor.run {
+                    newCommentText = ""
+                    print("📝 ReviewDetailView: Comment posted successfully")
+                }
+                
+                // Reload comments to show the new comment
+                loadComments()
+                
+                // Refresh the reviews in the store to update comment counts
+                Task {
+                    do {
+                        let updatedReviews = try await supabaseService.fetchReviews()
+                        await MainActor.run {
+                            reviewStore.reviews = updatedReviews
+                            print("📝 ReviewDetailView: Review store refreshed with updated comment counts")
+                        }
+                    } catch {
+                        print("❌ ReviewDetailView: Failed to refresh review store: \(error)")
+                    }
+                }
+                
+            } catch {
+                print("❌ ReviewDetailView: Failed to post comment: \(error)")
+                // Handle error - could show an alert to user
+            }
+        }
     }
 }
 
@@ -293,18 +332,37 @@ struct CommentRow: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Circle()
-                .fill(Color.gray.opacity(0.3))
+            // User Avatar
+            if let avatarURL = comment.avatarURL, !avatarURL.isEmpty {
+                AsyncImage(url: URL(string: avatarURL)) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .overlay(
+                            Text(String(comment.displayUsername.prefix(1)).uppercased())
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white)
+                        )
+                }
                 .frame(width: 36, height: 36)
-                .overlay(
-                    Text("U")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white)
-                )
+                .clipShape(Circle())
+            } else {
+                Circle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Text(String(comment.displayUsername.prefix(1)).uppercased())
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white)
+                    )
+            }
             
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("@user")
+                    Text("@\(comment.username)")
                         .font(.system(size: 15, weight: .medium))
                     
                     Text("•")
@@ -324,14 +382,14 @@ struct CommentRow: View {
                         HStack(spacing: 4) {
                             Image(systemName: isLiked ? "heart.fill" : "heart")
                                 .foregroundColor(isLiked ? .red : .secondary)
-                            Text("\(comment.likesCount + (isLiked ? 1 : 0))")
+                            Text("\(isLiked ? 1 : 0)")
                                 .foregroundColor(.secondary)
                         }
                         .font(.system(size: 13))
                     }
                     
                     Button("Reply") {
-                        // Reply action
+                        // Reply action - could implement later
                     }
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
