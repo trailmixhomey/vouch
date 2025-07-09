@@ -37,20 +37,45 @@ struct ReviewCard: View {
     
     private var headerSection: some View {
         HStack {
-            // Profile image placeholder
-            Circle()
-                .fill(Color.gray.opacity(0.3))
+            NavigationLink(destination: ProfileView(userId: review.userId)) {
+                // Profile image
+                Group {
+                    if let profileImageURL = review.profileImageURL, !profileImageURL.isEmpty {
+                        AsyncImage(url: URL(string: profileImageURL)) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Circle()
+                                .fill(Color.gray.opacity(0.3))
+                                .overlay(
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                )
+                        }
+                    } else {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                Text(profileInitials)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white)
+                            )
+                    }
+                }
                 .frame(width: 40, height: 40)
-                .overlay(
-                    Text("AR")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white)
-                )
+                .clipShape(Circle())
+            }
+            .buttonStyle(PlainButtonStyle())
             
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text("@reviewmaster")
-                        .font(.system(size: 15, weight: .medium))
+                    NavigationLink(destination: ProfileView(userId: review.userId)) {
+                        Text("@\(review.username ?? "user")")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.primary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                     
                     Text("•")
                         .foregroundColor(.secondary)
@@ -75,6 +100,16 @@ struct ReviewCard: View {
                 Image(systemName: "ellipsis")
                     .foregroundColor(.secondary)
             }
+        }
+    }
+    
+    private var profileInitials: String {
+        if let displayName = review.displayName, !displayName.isEmpty {
+            return String(displayName.prefix(2).uppercased())
+        } else if let username = review.username, !username.isEmpty {
+            return String(username.prefix(2).uppercased())
+        } else {
+            return "U"
         }
     }
     

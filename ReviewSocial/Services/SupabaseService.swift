@@ -407,6 +407,11 @@ class SupabaseService: ObservableObject {
             let likesCount = reviewData["likes_count"]?.intValue ?? 0
             let commentsCount = reviewData["comments_count"]?.intValue ?? 0
             
+            // Parse user information
+            let username = reviewData["username"]?.stringValue
+            let displayName = reviewData["display_name"]?.stringValue
+            let profileImageURL = reviewData["profile_image_url"]?.stringValue
+            
             var review = Review(
                 userId: userId,
                 title: title,
@@ -424,6 +429,11 @@ class SupabaseService: ObservableObject {
             review.likesCount = likesCount
             review.commentsCount = commentsCount
             // Note: sharesCount is not tracked in the database yet, keeping default 0
+            
+            // Set user information
+            review.username = username
+            review.displayName = displayName
+            review.profileImageURL = profileImageURL
             
             print("🔍 SupabaseService: Review '\(title)' has \(commentsCount) comments, \(likesCount) likes")
             
@@ -496,6 +506,61 @@ class SupabaseService: ObservableObject {
             .eq("review_id", value: reviewId.uuidString)
             .eq("user_id", value: currentUser.id.uuidString)
             .execute()
+    }
+    
+    // MARK: - Users
+    
+    func fetchUser(by userId: UUID) async throws -> User {
+        print("👤 SupabaseService: Fetching user with ID: \(userId)")
+        
+        let response: [[String: AnyJSON]] = try await client
+            .from("users")
+            .select("*")
+            .eq("id", value: userId.uuidString)
+            .execute()
+            .value
+        
+        guard let userData = response.first else {
+            throw SupabaseError.userNotFound
+        }
+        
+        guard let idString = userData["id"]?.stringValue,
+              let id = UUID(uuidString: idString),
+              let username = userData["username"]?.stringValue,
+              let displayName = userData["display_name"]?.stringValue,
+              let email = userData["email"]?.stringValue else {
+            throw SupabaseError.invalidUserData
+        }
+        
+        let bio = userData["bio"]?.stringValue ?? ""
+        let profileImageURL = userData["profile_image_url"]?.stringValue
+        let followersCount = userData["followers_count"]?.intValue ?? 0
+        let followingCount = userData["following_count"]?.intValue ?? 0
+        let reviewsCount = userData["reviews_count"]?.intValue ?? 0
+        let isVerified = userData["is_verified"]?.boolValue ?? false
+        let isPrivate = userData["is_private"]?.boolValue ?? true
+        
+        let dateJoinedString = userData["created_at"]?.stringValue ?? userData["date_joined"]?.stringValue
+        let dateJoined = dateJoinedString.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+        
+        var user = User(
+            id: id,
+            username: username,
+            displayName: displayName,
+            email: email,
+            bio: bio,
+            profileImageURL: profileImageURL,
+            isPrivate: isPrivate
+        )
+        
+        user.followersCount = followersCount
+        user.followingCount = followingCount
+        user.reviewsCount = reviewsCount
+        user.isVerified = isVerified
+        user.dateJoined = dateJoined
+        
+        print("✅ SupabaseService: Successfully fetched user: @\(username)")
+        return user
     }
     
     // MARK: - Comments
@@ -884,19 +949,111 @@ class SupabaseService: ObservableObject {
 
     // MARK: - File Upload
     
-    func uploadAvatar(imageData: Data) async throws -> String {
+    func uploadProfileImage(imageData: Data) async throws -> String {
+        print("🔄 SupabaseService: Starting profile image upload...")
+        
+        guard let currentUser = currentUser else { 
+            print("❌ SupabaseService: No current user found!")
+            throw SupabaseError.unauthenticated 
+        }
+        
+        print("✅ SupabaseService: Current user ID: \(currentUser.id)")
+        print("✅ SupabaseService: Current user username: \(currentUser.username)")
+        print("✅ SupabaseService: Image data size: \(imageData.count) bytes")
+        
         let fileName = "\(UUID().uuidString).jpg"
-        let filePath = "avatars/\(fileName)"
+        let filePath = "\(currentUser.id.uuidString.lowercased())/\(fileName)"
         
-        try await client.storage
-            .from("avatars")
-            .upload(filePath, data: imageData)
+        print("✅ SupabaseService: Generated file path: \(filePath)")
+        print("✅ SupabaseService: File name: \(fileName)")
         
+        // Check if we're authenticated with Supabase
+        do {
+            let authUser = try await client.auth.user()
+            print("✅ SupabaseService: Auth user ID: \(authUser.id)")
+            print("✅ SupabaseService: Auth user email: \(authUser.email ?? "nil")")
+            print("✅ SupabaseService: Auth user matches current user: \(authUser.id == currentUser.id)")
+        } catch {
+            print("❌ SupabaseService: Failed to get auth user: \(error)")
+            throw error
+        }
+        
+        // Test bucket access first
+        print("🔍 SupabaseService: Testing bucket access...")
+        do {
+            let bucketInfo = try await client.storage.from("profile-images").list()
+            print("✅ SupabaseService: Bucket access successful, found \(bucketInfo.count) items")
+        } catch {
+            print("❌ SupabaseService: Bucket access failed: \(error)")
+            if let storageError = error as? StorageError {
+                print("❌ SupabaseService: Storage error details: \(storageError)")
+            }
+        }
+        
+        // Attempt the upload
+        print("🔄 SupabaseService: Attempting upload to bucket 'profile-images' with path: \(filePath)")
+        do {
+            try await client.storage
+                .from("profile-images")
+                .upload(filePath, data: imageData)
+            print("✅ SupabaseService: Upload successful!")
+        } catch {
+            print("❌ SupabaseService: Upload failed with error: \(error)")
+            print("❌ SupabaseService: Error type: \(type(of: error))")
+            
+            // Try to get more specific error information
+            if let storageError = error as? StorageError {
+                print("❌ SupabaseService: Storage error: \(storageError)")
+            }
+            
+            if let postgrestError = error as? PostgrestError {
+                print("❌ SupabaseService: PostgREST error: \(postgrestError)")
+                print("❌ SupabaseService: PostgREST code: \(postgrestError.code ?? "nil")")
+                print("❌ SupabaseService: PostgREST message: \(postgrestError.message)")
+                print("❌ SupabaseService: PostgREST details: \(postgrestError.detail ?? "nil")")
+            }
+            
+            // Print the raw error description
+            print("❌ SupabaseService: Raw error description: \(error.localizedDescription)")
+            
+            throw error
+        }
+        
+        // Get public URL
+        print("🔄 SupabaseService: Getting public URL...")
         let publicURL = try client.storage
-            .from("avatars")
+            .from("profile-images")
             .getPublicURL(path: filePath)
         
+        print("✅ SupabaseService: Public URL generated: \(publicURL.absoluteString)")
         return publicURL.absoluteString
+    }
+    
+    func updateUserProfileImage(imageURL: String) async throws {
+        guard let currentUser = currentUser else { throw SupabaseError.unauthenticated }
+        
+        let updateData: [String: AnyJSON] = [
+            "profile_image_url": .string(imageURL)
+        ]
+        
+        try await client
+            .from("users")
+            .update(updateData)
+            .eq("id", value: currentUser.id.uuidString)
+            .execute()
+        
+        // Update the local user object
+        if var updatedUser = self.currentUser {
+            updatedUser.profileImageURL = imageURL
+            await MainActor.run {
+                self.currentUser = updatedUser
+            }
+        }
+    }
+    
+    func uploadAvatar(imageData: Data) async throws -> String {
+        // Legacy method - redirect to new profile image upload
+        return try await uploadProfileImage(imageData: imageData)
     }
 }
 
@@ -906,6 +1063,8 @@ enum SupabaseError: Error {
     case unauthenticated
     case networkError
     case invalidData
+    case userNotFound
+    case invalidUserData
     
     var localizedDescription: String {
         switch self {
@@ -915,6 +1074,10 @@ enum SupabaseError: Error {
             return "Network error occurred"
         case .invalidData:
             return "Invalid data provided"
+        case .userNotFound:
+            return "User not found"
+        case .invalidUserData:
+            return "Invalid user data received"
         }
     }
 }

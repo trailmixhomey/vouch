@@ -105,10 +105,10 @@ struct ReviewDetailView: View {
                                             AsyncImage(url: URL(string: review.imageURLs[index])) { image in
                                                 image
                                                     .resizable()
-                                                    .aspectRatio(4/3, contentMode: .fill)
-                                                    .frame(width: 300, height: 225)
+                                                    .aspectRatio(contentMode: .fill)
+                                                    .frame(width: 150, height: 200)
                                                     .clipped()
-                                                                                                         .cornerRadius(12)
+                                                    .cornerRadius(12)
                                                      .onTapGesture {
                                                          selectedImageIndex = index
                                                          showingImageViewer = true
@@ -116,7 +116,7 @@ struct ReviewDetailView: View {
                                             } placeholder: {
                                                 Rectangle()
                                                     .fill(Color.gray.opacity(0.3))
-                                                    .frame(width: 300, height: 225)
+                                                    .frame(width: 150, height: 200)
                                                     .cornerRadius(12)
                                                     .overlay(
                                                         ProgressView()

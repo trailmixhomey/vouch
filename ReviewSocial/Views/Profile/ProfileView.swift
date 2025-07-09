@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct ProfileView: View {
     @StateObject private var reviewStore = ReviewStore.shared
@@ -11,6 +12,11 @@ struct ProfileView: View {
     @State private var errorMessage = ""
     @State private var showError = false
     @State private var pendingRequestsCount = 0
+    @State private var viewedUser: User? = nil
+    @State private var isLoadingUser = false
+    @State private var showingImagePicker = false
+    @State private var selectedImageItem: PhotosPickerItem? = nil
+    @State private var isUploadingImage = false
     
     let userId: UUID? // Optional userId for viewing other profiles
     
@@ -19,16 +25,26 @@ struct ProfileView: View {
     }
     
     private var user: User {
-        // Use current user from service or create a default user
-        if let currentUser = supabaseService.currentUser {
-            return currentUser
+        if isOwnProfile {
+            // Use current user from service or create a default user
+            if let currentUser = supabaseService.currentUser {
+                return currentUser
+            } else {
+                // Return a default user if no authenticated user
+                return User(
+                    username: "user",
+                    displayName: "User",
+                    email: "user@example.com",
+                    bio: "Welcome to ReviewSocial!"
+                )
+            }
         } else {
-            // Return a default user if no authenticated user
-            return User(
-                username: "user",
-                displayName: "User",
-                email: "user@example.com",
-                bio: "Welcome to ReviewSocial!"
+            // Use the fetched user for other profiles
+            return viewedUser ?? User(
+                username: "loading",
+                displayName: "Loading...",
+                email: "loading@example.com",
+                bio: "Loading user information..."
             )
         }
     }
@@ -44,14 +60,73 @@ struct ProfileView: View {
                     // Profile Header
                     VStack(spacing: 16) {
                         // Profile Image
-                        Circle()
-                            .fill(Color.blue.opacity(0.3))
-                            .frame(width: 80, height: 80)
-                            .overlay(
-                                Text(user.displayName.prefix(2).uppercased())
-                                    .font(.system(size: 28, weight: .medium))
-                                    .foregroundColor(.white)
-                            )
+                        Button(action: {
+                            if isOwnProfile {
+                                showingImagePicker = true
+                            }
+                        }) {
+                            ZStack {
+                                Group {
+                                    if let profileImageURL = user.profileImageURL, !profileImageURL.isEmpty {
+                                        AsyncImage(url: URL(string: profileImageURL)) { image in
+                                            image
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Circle()
+                                                .fill(Color.blue.opacity(0.3))
+                                                .overlay(
+                                                    ProgressView()
+                                                        .scaleEffect(0.8)
+                                                )
+                                        }
+                                    } else {
+                                        Circle()
+                                            .fill(Color.blue.opacity(0.3))
+                                            .overlay(
+                                                Text(user.displayName.prefix(2).uppercased())
+                                                    .font(.system(size: 28, weight: .medium))
+                                                    .foregroundColor(.white)
+                                            )
+                                    }
+                                }
+                                .frame(width: 80, height: 80)
+                                .clipShape(Circle())
+                                
+                                // Show upload indicator when uploading
+                                if isUploadingImage {
+                                    Circle()
+                                        .fill(Color.black.opacity(0.5))
+                                        .frame(width: 80, height: 80)
+                                        .overlay(
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                .scaleEffect(0.8)
+                                        )
+                                }
+                                
+                                // Show edit indicator for own profile
+                                if isOwnProfile && !isUploadingImage {
+                                    VStack {
+                                        Spacer()
+                                        HStack {
+                                            Spacer()
+                                            Circle()
+                                                .fill(Color.blue)
+                                                .frame(width: 24, height: 24)
+                                                .overlay(
+                                                    Image(systemName: "camera.fill")
+                                                        .font(.system(size: 12))
+                                                        .foregroundColor(.white)
+                                                )
+                                                .offset(x: -4, y: -4)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .disabled(!isOwnProfile || isUploadingImage)
+                        .buttonStyle(PlainButtonStyle())
                         
                         // User Info
                         VStack(spacing: 4) {
@@ -247,12 +322,25 @@ struct ProfileView: View {
             loadFollowStatus()
             if isOwnProfile {
                 loadPendingRequestsCount()
+            } else if let userId = userId {
+                // Fetch user data for other profiles
+                Task {
+                    await fetchUserData(userId: userId)
+                }
             }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK") { }
         } message: {
             Text(errorMessage)
+        }
+        .photosPicker(isPresented: $showingImagePicker, selection: $selectedImageItem, matching: .images)
+        .onChange(of: selectedImageItem) { newItem in
+            if let newItem = newItem {
+                Task {
+                    await handleImageSelection(newItem)
+                }
+            }
         }
     }
     
@@ -378,6 +466,101 @@ struct ProfileView: View {
                 await MainActor.run {
                     self.pendingRequestsCount = 0
                 }
+            }
+        }
+    }
+    
+    private func fetchUserData(userId: UUID) async {
+        isLoadingUser = true
+        
+        do {
+            let fetchedUser = try await supabaseService.fetchUser(by: userId)
+            await MainActor.run {
+                viewedUser = fetchedUser
+                isLoadingUser = false
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = "Failed to load user profile: \(error.localizedDescription)"
+                showError = true
+                isLoadingUser = false
+            }
+        }
+    }
+    
+    private func handleImageSelection(_ item: PhotosPickerItem) async {
+        print("📸 ProfileView: Starting image selection handling...")
+        
+        await MainActor.run {
+            isUploadingImage = true
+        }
+        
+        do {
+            print("📸 ProfileView: Loading image data from PhotosPickerItem...")
+            guard let imageData = try await item.loadTransferable(type: Data.self) else {
+                print("❌ ProfileView: Failed to load image data from PhotosPickerItem")
+                throw SupabaseError.invalidData
+            }
+            
+            print("📸 ProfileView: Original image data size: \(imageData.count) bytes")
+            
+            // Compress image if needed
+            print("📸 ProfileView: Compressing image...")
+            let compressedData = await compressImageData(imageData)
+            print("📸 ProfileView: Compressed image data size: \(compressedData.count) bytes")
+            
+            // Upload to Supabase Storage
+            print("📸 ProfileView: Uploading to Supabase Storage...")
+            let imageURL = try await supabaseService.uploadProfileImage(imageData: compressedData)
+            print("📸 ProfileView: Upload successful! Image URL: \(imageURL)")
+            
+            // Update user profile with new image URL
+            print("📸 ProfileView: Updating user profile with new image URL...")
+            try await supabaseService.updateUserProfileImage(imageURL: imageURL)
+            print("📸 ProfileView: Profile updated successfully!")
+            
+            await MainActor.run {
+                isUploadingImage = false
+                selectedImageItem = nil // Reset selection
+            }
+            
+            print("✅ ProfileView: Image upload and profile update completed successfully!")
+            
+        } catch {
+            print("❌ ProfileView: Image upload failed with error: \(error)")
+            print("❌ ProfileView: Error type: \(type(of: error))")
+            print("❌ ProfileView: Error description: \(error.localizedDescription)")
+            
+            await MainActor.run {
+                errorMessage = "Failed to upload profile image: \(error.localizedDescription)"
+                showError = true
+                isUploadingImage = false
+                selectedImageItem = nil // Reset selection
+            }
+        }
+    }
+    
+    private func compressImageData(_ data: Data) async -> Data {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let image = UIImage(data: data) else {
+                    continuation.resume(returning: data)
+                    return
+                }
+                
+                // Resize to reasonable dimensions (max 512x512)
+                let maxDimension: CGFloat = 512
+                let scale = min(maxDimension / image.size.width, maxDimension / image.size.height, 1.0)
+                let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                
+                UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+                image.draw(in: CGRect(origin: .zero, size: newSize))
+                let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+                UIGraphicsEndImageContext()
+                
+                // Compress to JPEG with 0.8 quality
+                let compressedData = resizedImage?.jpegData(compressionQuality: 0.8) ?? data
+                continuation.resume(returning: compressedData)
             }
         }
     }

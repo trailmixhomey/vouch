@@ -17,6 +17,11 @@ struct Review: Identifiable, Codable {
     var dateModified: Date?
     var isEdited: Bool
     
+    // User information for display in feed
+    var username: String?
+    var displayName: String?
+    var profileImageURL: String?
+    
     init(userId: UUID, title: String, content: String, rating: Double, category: ReviewCategory, imageURLs: [String] = []) {
         self.userId = userId
         self.title = title
@@ -31,6 +36,9 @@ struct Review: Identifiable, Codable {
         self.dateCreated = Date()
         self.dateModified = nil
         self.isEdited = false
+        self.username = nil
+        self.displayName = nil
+        self.profileImageURL = nil
     }
 }
 
