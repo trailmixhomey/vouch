@@ -9,6 +9,9 @@ struct ReviewCard: View {
     @State private var showingComments = false
     @State private var showingImageViewer = false
     @State private var selectedImageIndex = 0
+    @State private var showingEditReview = false
+    @State private var showingDeleteAlert = false
+    @StateObject private var supabaseService = SupabaseService.shared
     
     init(review: Review) {
         self.review = review
@@ -32,6 +35,36 @@ struct ReviewCard: View {
                 initialIndex: selectedImageIndex,
                 isPresented: $showingImageViewer
             )
+        }
+        .sheet(isPresented: $showingEditReview) {
+            NavigationView {
+                CreateReviewView(editingReview: review) {
+                    // Close the edit sheet when update is successful
+                    showingEditReview = false
+                }
+                .navigationTitle("Edit Review")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") {
+                            showingEditReview = false
+                        }
+                    }
+                }
+            }
+        }
+        .alert("Delete Review", isPresented: $showingDeleteAlert) {
+            Button("Delete", role: .destructive) {
+                print("🗑️ User confirmed deletion of review: \(review.id)")
+                Task {
+                    await deleteReview()
+                }
+            }
+            Button("Cancel", role: .cancel) { 
+                print("❌ User cancelled deletion")
+            }
+        } message: {
+            Text("Are you sure you want to delete this review? This action cannot be undone.")
         }
     }
     
@@ -96,9 +129,26 @@ struct ReviewCard: View {
             
             Spacer()
             
-            Button(action: {}) {
-                Image(systemName: "ellipsis")
-                    .foregroundColor(.secondary)
+            // Only show menu button if this is the current user's review
+            if supabaseService.currentUser?.id == review.userId {
+                Menu {
+                    Button(action: {
+                        showingEditReview = true
+                    }) {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    
+                    Button(role: .destructive, action: {
+                        print("🗑️ Delete button tapped for review: \(review.id)")
+                        showingDeleteAlert = true
+                    }) {
+                        Label("Delete", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 16))
+                }
             }
         }
     }
@@ -251,6 +301,24 @@ struct ReviewCard: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: review.dateCreated, relativeTo: Date())
+    }
+    
+    private func deleteReview() async {
+        print("🗑️ deleteReview() called for review: \(review.id)")
+        do {
+            print("🔄 Calling supabaseService.deleteReview...")
+            try await supabaseService.deleteReview(reviewId: review.id)
+            print("✅ Review deleted from database successfully")
+            
+            // Remove from local store
+            await MainActor.run {
+                ReviewStore.shared.reviews.removeAll { $0.id == review.id }
+                print("✅ Review removed from local store")
+            }
+        } catch {
+            print("❌ Failed to delete review: \(error)")
+            // You might want to show an error alert here
+        }
     }
 }
 

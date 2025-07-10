@@ -166,6 +166,7 @@ struct SearchView: View {
             }
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.large)
+        .keyboardToolbar()
     }
     
     private func performSearch() {

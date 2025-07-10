@@ -3,6 +3,8 @@ import PhotosUI
 
 struct CreateReviewView: View {
     @Binding var selectedTab: Int
+    let editingReview: Review?
+    let onEditComplete: (() -> Void)?
     @StateObject private var reviewStore = ReviewStore.shared
     @StateObject private var supabaseService = SupabaseService.shared
     @State private var title = ""
@@ -19,6 +21,10 @@ struct CreateReviewView: View {
     @State private var showingSuccessAlert = false
     @State private var showingErrorAlert = false
     @State private var errorMessage = ""
+    
+    private var isEditing: Bool {
+        editingReview != nil
+    }
     
     var body: some View {
         ScrollView {
@@ -187,7 +193,7 @@ struct CreateReviewView: View {
                                 ProgressView()
                                     .scaleEffect(0.8)
                             }
-                            Text(isPosting ? "Posting..." : "Post Review")
+                            Text(isPosting ? (isEditing ? "Updating..." : "Posting...") : (isEditing ? "Update Review" : "Post Review"))
                         }
                         .foregroundColor(.white)
                         .padding()
@@ -199,8 +205,14 @@ struct CreateReviewView: View {
                 }
                 .padding()
             }
-        .navigationTitle("Write Review")
+        .navigationTitle(isEditing ? "Edit Review" : "Write Review")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if isEditing {
+                populateFieldsForEditing()
+            }
+        }
+        .keyboardToolbar()
         .photosPicker(isPresented: $showingImagePicker, selection: $selectedPhotos, maxSelectionCount: 5, matching: .images)
         .sheet(isPresented: $showingCamera) {
             CameraView(isPresented: $showingCamera, capturedImage: $capturedImage)
@@ -228,10 +240,10 @@ struct CreateReviewView: View {
         } message: {
             Text("Choose how you'd like to add photos to your review")
         }
-        .alert("Review Posted!", isPresented: $showingSuccessAlert) {
+        .alert(isEditing ? "Review Updated!" : "Review Posted!", isPresented: $showingSuccessAlert) {
             Button("OK") { }
         } message: {
-            Text("Your review has been posted successfully and is now visible on the home feed.")
+            Text(isEditing ? "Your review has been updated successfully." : "Your review has been posted successfully and is now visible on the home feed.")
         }
         .alert("Error", isPresented: $showingErrorAlert) {
             Button("OK") { }
@@ -288,8 +300,18 @@ struct CreateReviewView: View {
         capturedImage = nil
     }
     
+    private func populateFieldsForEditing() {
+        guard let review = editingReview else { return }
+        
+        title = review.title
+        content = review.content
+        rating = review.rating
+        selectedCategory = review.category
+        selectedImages = review.imageURLs
+    }
+    
     private func postReview() {
-        print("📝 CreateReviewView: Starting post review process...")
+        print("📝 CreateReviewView: Starting \(isEditing ? "update" : "post") review process...")
         print("🔍 CreateReviewView: Current user: \(supabaseService.currentUser?.username ?? "nil")")
         print("🔍 CreateReviewView: Is authenticated: \(supabaseService.isAuthenticated)")
         
@@ -302,11 +324,11 @@ struct CreateReviewView: View {
         
         isPosting = true
         
-        // Create new review
+        // Create or update review
         let userId = supabaseService.currentUser?.id ?? UUID()
         print("🔍 CreateReviewView: Using user ID: \(userId)")
         
-        let newReview = Review(
+        var reviewToSave = Review(
             userId: userId,
             title: title,
             content: content,
@@ -315,48 +337,91 @@ struct CreateReviewView: View {
             imageURLs: selectedImages
         )
         
+        if isEditing, let existingReview = editingReview {
+            // Preserve the original ID and date for updates
+            reviewToSave.id = existingReview.id
+            reviewToSave.dateCreated = existingReview.dateCreated
+            reviewToSave.dateModified = Date()
+            reviewToSave.isEdited = true
+        }
+        
         print("🔍 CreateReviewView: Created review object - Title: \(title), Rating: \(rating)")
         
         // Save to database
         Task {
             do {
-                print("🔍 CreateReviewView: Calling supabaseService.createReview...")
-                try await supabaseService.createReview(newReview)
+                if isEditing {
+                    print("🔍 CreateReviewView: Calling supabaseService.updateReview...")
+                    try await supabaseService.updateReview(reviewToSave)
+                } else {
+                    print("🔍 CreateReviewView: Calling supabaseService.createReview...")
+                    try await supabaseService.createReview(reviewToSave)
+                }
                 
-                print("✅ CreateReviewView: Review posted successfully")
+                print("✅ CreateReviewView: Review \(isEditing ? "updated" : "posted") successfully")
                 
                 await MainActor.run {
-                    // Also add to local store for immediate UI update
-                    reviewStore.addReview(newReview)
+                    if isEditing {
+                        // Update in local store
+                        if let index = reviewStore.reviews.firstIndex(where: { $0.id == reviewToSave.id }) {
+                            reviewStore.reviews[index] = reviewToSave
+                        }
+                    } else {
+                        // Add to local store for immediate UI update
+                        reviewStore.addReview(reviewToSave)
+                    }
                     
-                    // Reset form
-                    title = ""
-                    content = ""
-                    rating = 3.0
-                    selectedCategory = nil
-                    selectedImages = []
-                    selectedPhotos = []
-                    capturedImage = nil
+                    // Reset form (only if not editing or when editing is done)
+                    if !isEditing {
+                        title = ""
+                        content = ""
+                        rating = 3.0
+                        selectedCategory = nil
+                        selectedImages = []
+                        selectedPhotos = []
+                        capturedImage = nil
+                        
+                        // Navigate to home tab
+                        selectedTab = 0
+                    }
+                    
                     isPosting = false
-                    
-                    // Navigate to home tab
-                    selectedTab = 0
                     
                     // Show success feedback
                     showingSuccessAlert = true
+                    
+                    // Call completion for editing if provided
+                    if isEditing {
+                        onEditComplete?()
+                    }
                 }
             } catch {
-                print("❌ CreateReviewView: Failed to post review: \(error)")
+                print("❌ CreateReviewView: Failed to \(isEditing ? "update" : "post") review: \(error)")
                 print("❌ CreateReviewView: Error type: \(type(of: error))")
                 print("❌ CreateReviewView: Error description: \(error.localizedDescription)")
                 
                 await MainActor.run {
                     isPosting = false
-                    errorMessage = "Failed to post review: \(error.localizedDescription)"
+                    errorMessage = "Failed to \(isEditing ? "update" : "post") review: \(error.localizedDescription)"
                     showingErrorAlert = true
                 }
             }
         }
+    }
+}
+
+// MARK: - Initializers
+extension CreateReviewView {
+    init(selectedTab: Binding<Int>) {
+        self._selectedTab = selectedTab
+        self.editingReview = nil
+        self.onEditComplete = nil
+    }
+    
+    init(editingReview: Review, onEditComplete: @escaping () -> Void) {
+        self._selectedTab = .constant(0)
+        self.editingReview = editingReview
+        self.onEditComplete = onEditComplete
     }
 }
 

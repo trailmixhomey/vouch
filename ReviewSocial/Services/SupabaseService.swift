@@ -410,7 +410,7 @@ class SupabaseService: ObservableObject {
             // Parse user information
             let username = reviewData["username"]?.stringValue
             let displayName = reviewData["display_name"]?.stringValue
-            let profileImageURL = reviewData["profile_image_url"]?.stringValue
+            let profileImageURL = reviewData["avatar_url"]?.stringValue
             
             var review = Review(
                 userId: userId,
@@ -452,6 +452,82 @@ class SupabaseService: ObservableObject {
             }
             throw error
         }
+    }
+    
+    func deleteReview(reviewId: UUID) async throws {
+        print("🗑️ SupabaseService: Starting deleteReview for ID: \(reviewId)")
+        
+        guard let currentUser = currentUser else { 
+            print("❌ SupabaseService: deleteReview failed - User not authenticated")
+            throw SupabaseError.unauthenticated 
+        }
+        
+        // Verify the user owns this review by checking the user_id in the database
+        let reviewResponse: [[String: AnyJSON]] = try await client
+            .from("reviews")
+            .select("user_id")
+            .eq("id", value: reviewId.uuidString)
+            .execute()
+            .value
+        
+        guard let reviewData = reviewResponse.first,
+              let ownerIdString = reviewData["user_id"]?.stringValue,
+              let ownerId = UUID(uuidString: ownerIdString) else {
+            print("❌ SupabaseService: Review not found or invalid data")
+            throw SupabaseError.invalidData
+        }
+        
+        // Check if the current user owns this review
+        guard ownerId == currentUser.id else {
+            print("❌ SupabaseService: User \(currentUser.id) does not own review \(reviewId)")
+            throw SupabaseError.unauthenticated
+        }
+        
+        // Delete the review (this will cascade delete likes, comments, bookmarks due to foreign key constraints)
+        try await client
+            .from("reviews")
+            .delete()
+            .eq("id", value: reviewId.uuidString)
+            .execute()
+        
+        print("✅ SupabaseService: Review deleted successfully")
+    }
+    
+    func updateReview(_ review: Review) async throws {
+        print("✏️ SupabaseService: Starting updateReview for ID: \(review.id)")
+        
+        guard let currentUser = currentUser else { 
+            print("❌ SupabaseService: updateReview failed - User not authenticated")
+            throw SupabaseError.unauthenticated 
+        }
+        
+        // Verify the user owns this review
+        guard review.userId == currentUser.id else {
+            print("❌ SupabaseService: User \(currentUser.id) does not own review \(review.id)")
+            throw SupabaseError.unauthenticated
+        }
+        
+        let reviewData: [String: AnyJSON] = [
+            "title": .string(review.title),
+            "content": .string(review.content),
+            "rating": .double(review.rating),
+            "category": .string(review.category.rawValue),
+            "image_urls": .array(review.imageURLs.map { .string($0) }),
+            "updated_at": .string(ISO8601DateFormatter().string(from: Date()))
+        ]
+        
+        print("🔍 SupabaseService: Review data to update:")
+        print("   - title: \(review.title)")
+        print("   - rating: \(review.rating)")
+        print("   - category: \(review.category.rawValue)")
+        
+        try await client
+            .from("reviews")
+            .update(reviewData)
+            .eq("id", value: review.id.uuidString)
+            .execute()
+        
+        print("✅ SupabaseService: Review updated successfully")
     }
     
     // MARK: - Likes
@@ -533,7 +609,7 @@ class SupabaseService: ObservableObject {
         }
         
         let bio = userData["bio"]?.stringValue ?? ""
-        let profileImageURL = userData["profile_image_url"]?.stringValue
+        let profileImageURL = userData["avatar_url"]?.stringValue
         let followersCount = userData["followers_count"]?.intValue ?? 0
         let followingCount = userData["following_count"]?.intValue ?? 0
         let reviewsCount = userData["reviews_count"]?.intValue ?? 0
@@ -1033,7 +1109,7 @@ class SupabaseService: ObservableObject {
         guard let currentUser = currentUser else { throw SupabaseError.unauthenticated }
         
         let updateData: [String: AnyJSON] = [
-            "profile_image_url": .string(imageURL)
+            "avatar_url": .string(imageURL)
         ]
         
         try await client

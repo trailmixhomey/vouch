@@ -123,6 +123,7 @@ struct AuthenticationView: View {
         .onAppear {
             print("🔐 AuthenticationView: View appeared")
         }
+        .keyboardToolbar()
     }
     
     private var canProceed: Bool {

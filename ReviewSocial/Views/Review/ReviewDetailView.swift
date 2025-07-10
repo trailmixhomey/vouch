@@ -252,6 +252,7 @@ struct ReviewDetailView: View {
             .onAppear {
                 loadComments()
             }
+            .keyboardToolbar()
             .fullScreenCover(isPresented: $showingImageViewer) {
                 ImageViewer(
                     imageURLs: review.imageURLs,

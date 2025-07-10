@@ -8,10 +8,8 @@ struct ProfileView: View {
     @State private var showingSettings = false
     @State private var followStatus: FollowRequestStatus = .none
     @State private var isLoadingFollow = false
-    @State private var showingFollowRequests = false
     @State private var errorMessage = ""
     @State private var showError = false
-    @State private var pendingRequestsCount = 0
     @State private var viewedUser: User? = nil
     @State private var isLoadingUser = false
     @State private var showingImagePicker = false
@@ -105,24 +103,7 @@ struct ProfileView: View {
                                         )
                                 }
                                 
-                                // Show edit indicator for own profile
-                                if isOwnProfile && !isUploadingImage {
-                                    VStack {
-                                        Spacer()
-                                        HStack {
-                                            Spacer()
-                                            Circle()
-                                                .fill(Color.blue)
-                                                .frame(width: 24, height: 24)
-                                                .overlay(
-                                                    Image(systemName: "camera.fill")
-                                                        .font(.system(size: 12))
-                                                        .foregroundColor(.white)
-                                                )
-                                                .offset(x: -4, y: -4)
-                                        }
-                                    }
-                                }
+
                             }
                         }
                         .disabled(!isOwnProfile || isUploadingImage)
@@ -186,39 +167,7 @@ struct ProfileView: View {
                         
                         // Action Buttons
                         HStack(spacing: 12) {
-                            if isOwnProfile {
-                                Button("Edit Profile") {
-                                    // Edit profile action
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 8)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(20)
-                                
-                                Button(action: {
-                                    showingFollowRequests = true
-                                }) {
-                                    HStack(spacing: 6) {
-                                        Text("Follow Requests")
-                                        if pendingRequestsCount > 0 {
-                                            Text("\(pendingRequestsCount)")
-                                                .font(.caption)
-                                                .fontWeight(.medium)
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.red)
-                                                .clipShape(Capsule())
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 8)
-                                .background(Color.gray.opacity(0.2))
-                                .foregroundColor(.primary)
-                                .cornerRadius(20)
-                            } else {
+                            if !isOwnProfile {
                                 followButton
                                 
                                 Button("Share Profile") {
@@ -315,14 +264,10 @@ struct ProfileView: View {
                     }
             }
         }
-        .sheet(isPresented: $showingFollowRequests) {
-            FollowRequestsView()
-        }
+
         .onAppear {
             loadFollowStatus()
-            if isOwnProfile {
-                loadPendingRequestsCount()
-            } else if let userId = userId {
+            if !isOwnProfile, let userId = userId {
                 // Fetch user data for other profiles
                 Task {
                     await fetchUserData(userId: userId)
@@ -454,21 +399,7 @@ struct ProfileView: View {
         }
     }
     
-    private func loadPendingRequestsCount() {
-        Task {
-            do {
-                let count = try await supabaseService.getPendingFollowRequestsCount()
-                await MainActor.run {
-                    self.pendingRequestsCount = count
-                }
-            } catch {
-                // Silently fail for count loading
-                await MainActor.run {
-                    self.pendingRequestsCount = 0
-                }
-            }
-        }
-    }
+
     
     private func fetchUserData(userId: UUID) async {
         isLoadingUser = true

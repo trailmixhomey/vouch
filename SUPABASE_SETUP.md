@@ -34,8 +34,14 @@ CREATE TABLE public.users (
     id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     display_name TEXT,
-    bio TEXT,
+    email TEXT,
+    bio TEXT DEFAULT '',
     avatar_url TEXT,
+    is_verified BOOLEAN DEFAULT FALSE,
+    is_private BOOLEAN DEFAULT TRUE,
+    followers_count INTEGER DEFAULT 0,
+    following_count INTEGER DEFAULT 0,
+    reviews_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -44,10 +50,11 @@ CREATE TABLE public.users (
 CREATE TABLE public.reviews (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
-    restaurant_name TEXT NOT NULL,
-    rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
-    review_text TEXT NOT NULL,
-    image_url TEXT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    rating DECIMAL(2,1) NOT NULL CHECK (rating >= 1.0 AND rating <= 5.0),
+    category TEXT NOT NULL,
+    image_urls TEXT[] DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -88,9 +95,103 @@ CREATE TABLE public.follows (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(follower_id, following_id)
 );
+
+-- Create follow_requests table
+CREATE TABLE public.follow_requests (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    requester_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    requested_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(requester_id, requested_id)
+);
+
+-- Create storage bucket for profile images
+INSERT INTO storage.buckets (id, name, public) VALUES ('profile-images', 'profile-images', true);
+
+-- Create storage policies for profile images
+CREATE POLICY "Avatar images are publicly accessible" ON storage.objects FOR SELECT USING (bucket_id = 'profile-images');
+CREATE POLICY "Users can upload their own avatar" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'profile-images' AND auth.uid()::text = (storage.foldername(name))[1]);
+CREATE POLICY "Users can update their own avatar" ON storage.objects FOR UPDATE USING (bucket_id = 'profile-images' AND auth.uid()::text = (storage.foldername(name))[1]);
+CREATE POLICY "Users can delete their own avatar" ON storage.objects FOR DELETE USING (bucket_id = 'profile-images' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- Create trigger function to automatically create user profile on signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.users (id, username, display_name, email, avatar_url)
+    VALUES (
+        NEW.id,
+        COALESCE(NEW.raw_user_meta_data->>'username', NEW.email),
+        COALESCE(NEW.raw_user_meta_data->>'display_name', NEW.email),
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data->>'avatar_url', '')
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create trigger on auth.users
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 ```
 
-### 4. Enable Row Level Security
+### 4. Create Database Views
+
+```sql
+-- Drop existing views if they exist (to avoid "already exists" errors)
+DROP VIEW IF EXISTS public.reviews_with_details;
+DROP VIEW IF EXISTS public.comments_with_users;
+
+-- Create reviews_with_details view for feed
+CREATE VIEW public.reviews_with_details AS
+SELECT 
+    r.id,
+    r.user_id,
+    r.title,
+    r.content,
+    r.rating,
+    r.category,
+    r.image_urls,
+    r.created_at,
+    r.updated_at,
+    u.username,
+    u.display_name,
+    u.avatar_url,
+    COALESCE(l.likes_count, 0) as likes_count,
+    COALESCE(c.comments_count, 0) as comments_count
+FROM public.reviews r
+LEFT JOIN public.users u ON r.user_id = u.id
+LEFT JOIN (
+    SELECT review_id, COUNT(*) as likes_count
+    FROM public.likes
+    GROUP BY review_id
+) l ON r.id = l.review_id
+LEFT JOIN (
+    SELECT review_id, COUNT(*) as comments_count
+    FROM public.comments
+    GROUP BY review_id
+) c ON r.id = c.review_id;
+
+-- Create comments_with_users view for comment display
+CREATE VIEW public.comments_with_users AS
+SELECT 
+    c.id,
+    c.review_id,
+    c.user_id,
+    c.content,
+    c.created_at,
+    c.updated_at,
+    u.username,
+    u.display_name,
+    u.avatar_url
+FROM public.comments c
+LEFT JOIN public.users u ON c.user_id = u.id;
+```
+
+### 5. Enable Row Level Security
 
 ```sql
 -- Enable RLS on all tables
@@ -100,9 +201,10 @@ ALTER TABLE public.likes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bookmarks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.follows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.follow_requests ENABLE ROW LEVEL SECURITY;
 ```
 
-### 5. Create Security Policies
+### 6. Create Security Policies
 
 ```sql
 -- User policies
@@ -130,19 +232,12 @@ CREATE POLICY "Comments are viewable by everyone" ON public.comments FOR SELECT 
 -- Follow policies
 CREATE POLICY "Users can manage their own follows" ON public.follows FOR ALL USING (auth.uid() = follower_id);
 CREATE POLICY "Follows are viewable by everyone" ON public.follows FOR SELECT USING (true);
-```
 
-### 6. Set Up File Storage
-
-```sql
--- Create storage bucket for avatars
-INSERT INTO storage.buckets (id, name, public) VALUES ('avatars', 'avatars', true);
-
--- Create storage policies
-CREATE POLICY "Avatar images are publicly accessible" ON storage.objects FOR SELECT USING (bucket_id = 'avatars');
-CREATE POLICY "Users can upload their own avatar" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
-CREATE POLICY "Users can update their own avatar" ON storage.objects FOR UPDATE USING (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
-CREATE POLICY "Users can delete their own avatar" ON storage.objects FOR DELETE USING (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
+-- Follow request policies
+CREATE POLICY "Users can view their own follow requests" ON public.follow_requests FOR SELECT USING (auth.uid() = requester_id OR auth.uid() = requested_id);
+CREATE POLICY "Users can create follow requests" ON public.follow_requests FOR INSERT WITH CHECK (auth.uid() = requester_id);
+CREATE POLICY "Users can update their own follow requests" ON public.follow_requests FOR UPDATE USING (auth.uid() = requester_id OR auth.uid() = requested_id);
+CREATE POLICY "Users can delete their own follow requests" ON public.follow_requests FOR DELETE USING (auth.uid() = requester_id OR auth.uid() = requested_id);
 ```
 
 ### 7. Create Database Function for User Profile

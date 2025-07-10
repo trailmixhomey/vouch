@@ -6,6 +6,9 @@ class NotificationManager: ObservableObject {
     
     @Published var notifications: [AppNotification] = []
     @Published var hasUnreadNotifications: Bool = false
+    @Published var followRequests: [FollowRequest] = []
+    
+    private let supabaseService = SupabaseService.shared
     
     private init() {
         // Start with empty notifications - will be populated from real data
@@ -13,9 +16,45 @@ class NotificationManager: ObservableObject {
     }
     
     func loadNotifications() {
-        // This would load notifications from the database in a real app
-        // For now, start with empty notifications
-        notifications = []
+        // Load regular notifications and follow requests
+        loadFollowRequests()
+        updateUnreadStatus()
+    }
+    
+    func loadFollowRequests() {
+        Task {
+            do {
+                let requests = try await supabaseService.getPendingFollowRequests()
+                await MainActor.run {
+                    self.followRequests = requests
+                    self.convertFollowRequestsToNotifications()
+                }
+            } catch {
+                print("Failed to load follow requests: \(error)")
+            }
+        }
+    }
+    
+    private func convertFollowRequestsToNotifications() {
+        // Convert follow requests to notifications
+        let requestNotifications = followRequests.map { request in
+            AppNotification(
+                id: request.id,
+                type: .followRequest,
+                title: "Follow Request",
+                message: "@\(request.requesterUsername ?? "User") wants to follow you",
+                timestamp: request.createdAt,
+                isRead: false,
+                actionUserId: request.requesterId,
+                relatedReviewId: nil,
+                followRequest: request
+            )
+        }
+        
+        // Remove old follow request notifications and add new ones
+        notifications = notifications.filter { $0.type != .followRequest }
+        notifications.append(contentsOf: requestNotifications)
+        notifications.sort { $0.timestamp > $1.timestamp }
         updateUnreadStatus()
     }
     
@@ -97,11 +136,11 @@ struct NotificationsView: View {
                     }
                 }
             }
-        .navigationTitle("Likes")
+        .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Mark all notifications as read when the view appears
-            notificationManager.markAllAsRead()
+            // Load notifications when the view appears
+            notificationManager.loadNotifications()
         }
     }
     
@@ -114,7 +153,7 @@ struct NotificationsView: View {
         case .comments:
             return notificationManager.notifications.filter { $0.type == .comment }
         case .follows:
-            return notificationManager.notifications.filter { $0.type == .follow }
+            return notificationManager.notifications.filter { $0.type == .follow || $0.type == .followRequest }
         }
     }
 }
@@ -135,15 +174,29 @@ struct AppNotification: Identifiable {
     var isRead: Bool
     let actionUserId: UUID?
     let relatedReviewId: UUID?
+    let followRequest: FollowRequest?
+    
+    init(id: UUID, type: NotificationType, title: String, message: String, timestamp: Date, isRead: Bool, actionUserId: UUID?, relatedReviewId: UUID?, followRequest: FollowRequest? = nil) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.message = message
+        self.timestamp = timestamp
+        self.isRead = isRead
+        self.actionUserId = actionUserId
+        self.relatedReviewId = relatedReviewId
+        self.followRequest = followRequest
+    }
 }
 
 enum NotificationType {
-    case like, dislike, comment, follow, mention
+    case like, dislike, comment, follow, followRequest, mention
 }
 
 struct NotificationRow: View {
     let notification: AppNotification
     let onTap: () -> Void
+    @State private var isProcessing = false
     
     var body: some View {
         HStack(spacing: 12) {
@@ -170,6 +223,34 @@ struct NotificationRow: View {
                 Text(timeAgoDisplay)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+                
+                // Follow request action buttons
+                if notification.type == .followRequest, let followRequest = notification.followRequest {
+                    HStack(spacing: 8) {
+                        Button("Accept") {
+                            handleFollowRequest(followRequest, accept: true)
+                        }
+                        .font(.system(size: 14, weight: .medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                        .disabled(isProcessing)
+                        
+                        Button("Decline") {
+                            handleFollowRequest(followRequest, accept: false)
+                        }
+                        .font(.system(size: 14, weight: .medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.gray.opacity(0.2))
+                        .foregroundColor(.primary)
+                        .cornerRadius(8)
+                        .disabled(isProcessing)
+                    }
+                    .padding(.top, 4)
+                }
             }
             
             Spacer()
@@ -184,7 +265,34 @@ struct NotificationRow: View {
         .background(notification.isRead ? Color.clear : Color.blue.opacity(0.02))
         .contentShape(Rectangle())
         .onTapGesture {
-            onTap()
+            if notification.type != .followRequest {
+                onTap()
+            }
+        }
+    }
+    
+    private func handleFollowRequest(_ followRequest: FollowRequest, accept: Bool) {
+        isProcessing = true
+        
+        Task {
+            do {
+                if accept {
+                    try await SupabaseService.shared.approveFollowRequest(requestId: followRequest.id, requesterId: followRequest.requesterId)
+                } else {
+                    try await SupabaseService.shared.denyFollowRequest(requestId: followRequest.id)
+                }
+                
+                // Refresh notifications
+                await MainActor.run {
+                    NotificationManager.shared.loadFollowRequests()
+                    isProcessing = false
+                }
+            } catch {
+                print("Failed to handle follow request: \(error)")
+                await MainActor.run {
+                    isProcessing = false
+                }
+            }
         }
     }
     
@@ -194,6 +302,7 @@ struct NotificationRow: View {
         case .dislike: return "heart.slash.fill"
         case .comment: return "message.fill"
         case .follow: return "person.fill.badge.plus"
+        case .followRequest: return "person.fill.questionmark"
         case .mention: return "at"
         }
     }
@@ -204,6 +313,7 @@ struct NotificationRow: View {
         case .dislike: return .red
         case .comment: return .blue
         case .follow: return .green
+        case .followRequest: return .orange
         case .mention: return .orange
         }
     }
