@@ -183,7 +183,7 @@ struct ReviewCard: View {
         HStack(spacing: 2) {
             ForEach(0..<5) { star in
                 Image(systemName: starIcon(for: star))
-                    .foregroundColor(.yellow)
+                    .foregroundColor(Color.gray.opacity(0.7))
                     .font(.system(size: 14))
             }
             Text(String(format: "%.1f", review.rating))

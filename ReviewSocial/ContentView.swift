@@ -7,37 +7,9 @@ struct ContentView: View {
     var body: some View {
         Group {
             if supabaseService.isAuthenticated {
-                VStack {
-                    // Debug info at the top
-                    VStack {
-                        Text("🐛 DEBUG: Authenticated as \(supabaseService.currentUser?.username ?? "Unknown")")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                        Button("Force Sign Out") {
-                            supabaseService.forceSignOut()
-                        }
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        Button("Debug Clear State") {
-                            supabaseService.debugClearAuthState()
-                        }
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                    }
-                    .padding(.top)
-                    
-                    mainAppInterface
-                }
+                mainAppInterface
             } else {
-                VStack {
-                    // Debug info at the top
-                    Text("🐛 DEBUG: Not authenticated")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .padding(.top)
-                    
-                    AuthenticationView()
-                }
+                AuthenticationView()
             }
         }
         .onAppear {

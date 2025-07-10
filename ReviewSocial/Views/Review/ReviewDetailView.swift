@@ -83,7 +83,7 @@ struct ReviewDetailView: View {
                             HStack(spacing: 4) {
                                 ForEach(0..<5) { star in
                                     Image(systemName: star < Int(review.rating) ? "star.fill" : (star < Int(review.rating) + 1 && review.rating.truncatingRemainder(dividingBy: 1) >= 0.5 ? "star.leadinghalf.filled" : "star"))
-                                        .foregroundColor(.yellow)
+                                        .foregroundColor(Color.gray.opacity(0.7))
                                         .font(.system(size: 18))
                                 }
                                 Text(String(format: "%.1f", review.rating))

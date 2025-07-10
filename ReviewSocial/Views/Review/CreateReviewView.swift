@@ -13,8 +13,7 @@ struct CreateReviewView: View {
     @State private var selectedCategory: ReviewCategory? = nil
     @State private var selectedImages: [String] = [] // URLs for uploaded images
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var showingImagePicker = false
-    @State private var showingCameraActionSheet = false
+        @State private var showingImagePicker = false
     @State private var showingCamera = false
     @State private var capturedImage: UIImage?
     @State private var isPosting = false
@@ -29,31 +28,6 @@ struct CreateReviewView: View {
     var body: some View {
         ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    // Category Selection
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Category")
-                            .font(.headline)
-                        
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(ReviewCategory.allCases, id: \.self) { category in
-                                    Button(action: {
-                                        selectedCategory = category
-                                    }) {
-                                        Text(category.rawValue)
-                                            .font(.system(size: 14, weight: .medium))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                            .background(selectedCategory == category ? Color.blue : Color.gray.opacity(0.2))
-                                            .foregroundColor(selectedCategory == category ? .white : .primary)
-                                            .cornerRadius(20)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-                    
                     // Title
                     VStack(alignment: .leading, spacing: 8) {
                         Text("What are you reviewing? *")
@@ -62,11 +36,32 @@ struct CreateReviewView: View {
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                     }
                     
-                    // Rating
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Rating")
+                    // Category pills (no header)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(ReviewCategory.allCases, id: \.self) { category in
+                                Button(action: {
+                                    selectedCategory = category
+                                }) {
+                                    Text(category.rawValue)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(selectedCategory == category ? Color.blue : Color.gray.opacity(0.2))
+                                        .foregroundColor(selectedCategory == category ? .white : .primary)
+                                        .cornerRadius(20)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    
+                    // Your Review (combined rating and content)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Your Review")
                             .font(.headline)
                         
+                        // Rating stars
                         HStack(spacing: 8) {
                             HStack(spacing: 4) {
                                 ForEach(1...5, id: \.self) { star in
@@ -74,7 +69,7 @@ struct CreateReviewView: View {
                                         rating = Double(star)
                                     }) {
                                         Image(systemName: Double(star) <= rating ? "star.fill" : "star")
-                                            .foregroundColor(.yellow)
+                                            .foregroundColor(Color.gray.opacity(0.7))
                                             .font(.system(size: 24))
                                     }
                                 }
@@ -86,13 +81,8 @@ struct CreateReviewView: View {
                             
                             Spacer()
                         }
-                    }
-                    
-                    // Content
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Your Review")
-                            .font(.headline)
                         
+                        // Review text box
                         ZStack(alignment: .topLeading) {
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(Color.gray.opacity(0.3), lineWidth: 1)
@@ -103,7 +93,7 @@ struct CreateReviewView: View {
                                 .frame(minHeight: 120)
                             
                             if content.isEmpty {
-                                Text("Share your experience in detail...")
+                                Text("Do tell...")
                                     .foregroundColor(.secondary)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 16)
@@ -171,37 +161,58 @@ struct CreateReviewView: View {
                         }
                     }
                     
-                    // Add Photos Button
-                    Button(action: {
-                        showingCameraActionSheet = true
-                    }) {
+                    // Bottom section with photo icons and post button
+                    VStack(spacing: 12) {
+                        // Photo icons at bottom left
                         HStack {
-                            Image(systemName: "camera")
-                            Text(selectedImages.isEmpty ? "Add Photos" : "Add More Photos")
-                        }
-                        .foregroundColor(.blue)
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                    
-                    // Post Button
-                    Button(action: postReview) {
-                        HStack {
-                            if isPosting {
-                                ProgressView()
-                                    .scaleEffect(0.8)
+                            HStack(spacing: 16) {
+                                // Camera icon
+                                Button(action: {
+                                    if CameraView.isCameraAvailable {
+                                        showingCamera = true
+                                    }
+                                }) {
+                                    Image(systemName: "camera")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(.secondary)
+                                }
+                                .disabled(!CameraView.isCameraAvailable)
+                                
+                                // Photo library icon
+                                Button(action: {
+                                    showingImagePicker = true
+                                }) {
+                                    Image(systemName: "photo")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(.secondary)
+                                }
                             }
-                            Text(isPosting ? (isEditing ? "Updating..." : "Posting...") : (isEditing ? "Update Review" : "Post Review"))
+                            
+                            Spacer()
                         }
-                        .foregroundColor(.white)
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(canPost ? Color.blue : Color.gray)
-                        .cornerRadius(8)
+                        
+                        // Post button at bottom right
+                        HStack {
+                            Spacer()
+                            
+                            Button(action: postReview) {
+                                HStack(spacing: 6) {
+                                    if isPosting {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                    }
+                                    Text(isPosting ? (isEditing ? "Updating..." : "Posting...") : (isEditing ? "Update" : "Post"))
+                                        .font(.system(size: 16, weight: .medium))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 10)
+                                .background(canPost ? Color.blue : Color.gray)
+                                .cornerRadius(20)
+                            }
+                            .disabled(!canPost || isPosting)
+                        }
                     }
-                    .disabled(!canPost || isPosting)
                 }
                 .padding()
             }
@@ -227,19 +238,7 @@ struct CreateReviewView: View {
                 addCapturedImage(image)
             }
         }
-        .confirmationDialog("Add Photos", isPresented: $showingCameraActionSheet) {
-            if CameraView.isCameraAvailable {
-                Button("Camera") {
-                    showingCamera = true
-                }
-            }
-            Button("Photo Library") {
-                showingImagePicker = true
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Choose how you'd like to add photos to your review")
-        }
+
         .alert(isEditing ? "Review Updated!" : "Review Posted!", isPresented: $showingSuccessAlert) {
             Button("OK") { }
         } message: {
